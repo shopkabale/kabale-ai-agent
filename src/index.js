@@ -1,22 +1,23 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, query, where, limit } from "firebase/firestore";
+import { getFirestore, collection, getDocs, query, limit } from "firebase/firestore";
 import algoliasearch from "algoliasearch";
 
 export default {
   async fetch(request, env) {
-    // 1. CORS HEADERS
+    // 1. CORS HEADERS (Allow your site to talk to this agent)
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     };
 
+    // Handle Browser Pre-checks
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders });
     }
 
     try {
-      // --- INITIALIZE SERVICES ---
+      // 2. INITIALIZE SERVICES (Safely inside try block)
       const firebaseConfig = {
         apiKey: env.FIREBASE_API_KEY,
         authDomain: env.FIREBASE_AUTH_DOMAIN,
@@ -34,91 +35,84 @@ export default {
 
       const url = new URL(request.url);
 
-      // --- ROUTING ---
-
-      // 1. Generate Description
-      if (url.pathname === "/generate-description" && request.method === "POST") {
+      // --- ROUTE 1: AUTO-FILL OPTIMIZER (Description + Category) ---
+      if (url.pathname === "/optimize-listing" && request.method === "POST") {
         const { title, price, features } = await request.json();
         
-        const systemPrompt = "You are a helpful assistant that outputs ONLY valid JSON. Do not include markdown formatting.";
-        const userPrompt = `
-          Write a sales listing for KabaleOnline (Uganda).
-          Product: ${title} (${price} UGX). Features: ${features}.
+        // Prompt 1: Description
+        const descPrompt = `
+          You are a professional Ugandan copywriter. 
+          Product: "${title}" (${price} UGX). Features: "${features}".
           
-          Return exactly this JSON structure:
-          { 
-            "shortDesc": "2 sentences for preview.", 
-            "longDesc": "Detailed, professional paragraph.", 
-            "seoTitle": "Catchy title with 'Kabale'."
-          }
+          Task: Write a sales listing.
+          - Short Description: 2 sentences for preview.
+          - Long Description: Professional, persuasive, mentions "Available in Kabale".
+          
+          Output ONLY valid JSON: { "shortDesc": "...", "longDesc": "..." }
         `;
-        
-        const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt }
-          ]
-        });
-        
-        let cleanJson = response.response;
-        if (typeof cleanJson === 'string') {
-            cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
-            cleanJson = JSON.parse(cleanJson);
-        }
 
-        return new Response(JSON.stringify(cleanJson), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        // Prompt 2: Category
+        const catPrompt = `
+          Classify this product: "${title}".
+          Allowed Categories: Electronics, Clothing & Apparel, Home & Furniture, Health & Beauty, Vehicles, Property, Textbooks, Other.
+          
+          Output ONLY valid JSON: { "category": "Exact Category Name" }
+        `;
+
+        // Run both in parallel for speed
+        const [descResponse, catResponse] = await Promise.all([
+          env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+            messages: [{ role: "system", content: "Output JSON only. No markdown." }, { role: "user", content: descPrompt }]
+          }),
+          env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+            messages: [{ role: "system", content: "Output JSON only. No markdown." }, { role: "user", content: catPrompt }]
+          })
+        ]);
+
+        // Helper to clean AI output
+        const cleanJSON = (str) => {
+            try { return JSON.parse(str.replace(/```json/g, '').replace(/```/g, '').trim()); }
+            catch (e) { return {}; }
+        };
+
+        const descData = cleanJSON(descResponse.response);
+        const catData = cleanJSON(catResponse.response);
+
+        return new Response(JSON.stringify({ ...descData, ...catData }), { 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        });
       }
 
-      // 2. Detect Scam (UPDATED LOGIC)
+      // --- ROUTE 2: SCAM DETECTOR (Smart Market Logic) ---
       if (url.pathname === "/detect-scam" && request.method === "POST") {
         const { title, price, description } = await request.json();
         
-        const systemPrompt = "You are a fraud detection expert for an online marketplace. Output ONLY valid JSON. No markdown.";
-        
-        // IMPROVED PROMPT: Uses general logic instead of strict rules
+        const systemPrompt = "You are a fraud detection expert. Output ONLY valid JSON. No markdown.";
         const userPrompt = `
-          Analyze this product listing for fraud risk in the context of Uganda (Currency: UGX).
-          
-          Item Name: "${title}"
-          Listed Price: ${price} UGX
-          Description: "${description}"
+          Analyze fraud risk for Uganda (Currency: UGX).
+          Item: "${title}", Listed Price: ${price} UGX, Desc: "${description}".
 
           INSTRUCTIONS:
-          1. Estimate the approximate market value of this item in Uganda.
-          2. Compare the Listed Price to the Market Value.
-          3. If the price is unreasonably low (e.g., < 10% of value), flag as HIGH risk.
-          4. Look for contradictions (e.g., "New Car" for "50,000 UGX").
-          5. Check for suspicious phrases in description (e.g., "pay delivery first").
-
-          Examples of HIGH Risk:
-          - "Toyota Corolla" for 500,000 UGX (Real value ~15M+)
-          - "iPhone 14" for 150,000 UGX (Real value ~3M+)
+          1. Estimate approximate market value in Uganda.
+          2. If listed price is unreasonably low (< 10% of value), flag as HIGH risk.
+          3. Look for contradictions (e.g. "New iPhone 14" for "200,000 UGX").
           
-          Return exactly this JSON structure:
-          { 
-            "riskScore": (integer 0-100), 
-            "riskLevel": "Low" or "Medium" or "High", 
-            "reason": "Clear explanation of why based on price analysis." 
-          }
+          Output JSON: { "riskScore": 0-100, "riskLevel": "Low/Medium/High", "reason": "..." }
         `;
         
         const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt }
-          ]
+          messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }]
         });
 
         let cleanJson = response.response;
         if (typeof cleanJson === 'string') {
-            cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
-            cleanJson = JSON.parse(cleanJson);
+            cleanJson = JSON.parse(cleanJson.replace(/```json/g, '').replace(/```/g, '').trim());
         }
 
         return new Response(JSON.stringify(cleanJson), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // 3. Lookup Product (Algolia)
+      // --- ROUTE 3: PRODUCT LOOKUP (Algolia) ---
       if (url.pathname === "/lookup-product" && request.method === "POST") {
         const { query } = await request.json();
         const { hits } = await algoliaIndex.search(query, {
@@ -128,11 +122,36 @@ export default {
         return new Response(JSON.stringify({ results: hits }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      return new Response(JSON.stringify({ status: "Active", message: "Kabale AI is Online" }), { 
+      // --- ROUTE 4: SYNC (Admin Tool) ---
+      if (url.pathname === "/sync-products" && request.method === "POST") {
+        const q = query(collection(db, "products"), limit(500));
+        const snapshot = await getDocs(q);
+        
+        const records = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                objectID: doc.id,
+                name: data.name,
+                price: data.price,
+                category: data.category,
+                description: data.description,
+                imageUrls: data.imageUrls,
+                createdAt: data.createdAt ? data.createdAt.seconds : Date.now() / 1000
+            };
+        });
+
+        if (records.length > 0) await algoliaIndex.saveObjects(records);
+
+        return new Response(JSON.stringify({ status: "Success", count: records.length }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      // ROOT CHECK
+      return new Response(JSON.stringify({ status: "Kabale AI Agent Active" }), { 
         headers: { ...corsHeaders, "Content-Type": "application/json" } 
       });
 
     } catch (error) {
+      // Return error details for debugging instead of generic "Failed to fetch"
       return new Response(JSON.stringify({ error: error.message, stack: error.stack }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
