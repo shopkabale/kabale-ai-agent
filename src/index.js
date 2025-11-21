@@ -4,21 +4,19 @@ import algoliasearch from "algoliasearch";
 
 export default {
   async fetch(request, env) {
-    // 1. DEFINE CORS HEADERS FIRST
+    // 1. DEFINE CORS HEADERS
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     };
 
-    // 2. HANDLE PREFLIGHT (Browser Check)
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders });
     }
 
     try {
-      // --- INITIALIZE SERVICES INSIDE TRY BLOCK ---
-      // This ensures if keys are missing, we catch the error instead of crashing
+      // --- INITIALIZE SERVICES ---
       const firebaseConfig = {
         apiKey: env.FIREBASE_API_KEY,
         authDomain: env.FIREBASE_AUTH_DOMAIN,
@@ -28,7 +26,6 @@ export default {
         appId: env.FIREBASE_APP_ID
       };
       
-      // Initialize services (Safely)
       const app = initializeApp(firebaseConfig);
       const db = getFirestore(app);
       
@@ -42,28 +39,70 @@ export default {
       // 1. Generate Description
       if (url.pathname === "/generate-description" && request.method === "POST") {
         const { title, price, features } = await request.json();
-        const prompt = `Write a sales listing for KabaleOnline. Product: ${title} (${price} UGX). Features: ${features}. Output JSON.`;
+        
+        // FIX: We added a SYSTEM message to force JSON, and removed response_format
+        const systemPrompt = "You are a helpful assistant that outputs ONLY valid JSON. Do not include markdown formatting like ```json.";
+        const userPrompt = `
+          Write a sales listing for KabaleOnline (Uganda).
+          Product: ${title} (${price} UGX). Features: ${features}.
+          
+          Return exactly this JSON structure:
+          { 
+            "shortDesc": "2 sentences for preview.", 
+            "longDesc": "Detailed, professional paragraph.", 
+            "seoTitle": "Catchy title with 'Kabale'."
+          }
+        `;
         
         const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-          messages: [{ role: "user", content: prompt }],
-          response_format: { type: "json_object" }
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+          ]
         });
-        return new Response(JSON.stringify(response), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        
+        // Parse the string response back to object to ensure it's valid
+        let cleanJson = response.response;
+        if (typeof cleanJson === 'string') {
+            // Sometimes AI wraps it in markdown, strip it
+            cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
+            cleanJson = JSON.parse(cleanJson);
+        }
+
+        return new Response(JSON.stringify(cleanJson), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
       // 2. Detect Scam
       if (url.pathname === "/detect-scam" && request.method === "POST") {
         const { title, price, description } = await request.json();
-        const prompt = `Analyze fraud risk. Item: ${title}, Price: ${price}. Output JSON with riskScore.`;
+        
+        const systemPrompt = "You are a fraud detection AI. Output ONLY valid JSON. No markdown.";
+        const userPrompt = `
+          Analyze fraud risk in Uganda.
+          Item: ${title}, Price: ${price} UGX, Desc: ${description}.
+          Rules: Electronics below 50% market value are HIGH risk.
+          
+          Return exactly this JSON structure:
+          { "riskScore": 0-100, "riskLevel": "Low/Medium/High", "reason": "Short explanation" }
+        `;
         
         const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-          messages: [{ role: "user", content: prompt }],
-          response_format: { type: "json_object" }
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+          ]
         });
-        return new Response(JSON.stringify(response), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+        let cleanJson = response.response;
+        if (typeof cleanJson === 'string') {
+            cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
+            cleanJson = JSON.parse(cleanJson);
+        }
+
+        return new Response(JSON.stringify(cleanJson), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // 3. Lookup Product
+      // 3. Lookup Product (Algolia)
       if (url.pathname === "/lookup-product" && request.method === "POST") {
         const { query } = await request.json();
         const { hits } = await algoliaIndex.search(query, {
@@ -79,9 +118,6 @@ export default {
       });
 
     } catch (error) {
-      // --- THE MAGIC FIX ---
-      // If ANYTHING fails, we return the error WITH CORS HEADERS
-      // This lets you see the actual error message in your tester
       return new Response(JSON.stringify({ error: error.message, stack: error.stack }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
