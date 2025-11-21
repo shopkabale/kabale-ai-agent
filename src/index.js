@@ -4,7 +4,7 @@ import algoliasearch from "algoliasearch";
 
 export default {
   async fetch(request, env) {
-    // 1. DEFINE CORS HEADERS
+    // 1. CORS HEADERS
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
@@ -40,8 +40,7 @@ export default {
       if (url.pathname === "/generate-description" && request.method === "POST") {
         const { title, price, features } = await request.json();
         
-        // FIX: We added a SYSTEM message to force JSON, and removed response_format
-        const systemPrompt = "You are a helpful assistant that outputs ONLY valid JSON. Do not include markdown formatting like ```json.";
+        const systemPrompt = "You are a helpful assistant that outputs ONLY valid JSON. Do not include markdown formatting.";
         const userPrompt = `
           Write a sales listing for KabaleOnline (Uganda).
           Product: ${title} (${price} UGX). Features: ${features}.
@@ -61,10 +60,8 @@ export default {
           ]
         });
         
-        // Parse the string response back to object to ensure it's valid
         let cleanJson = response.response;
         if (typeof cleanJson === 'string') {
-            // Sometimes AI wraps it in markdown, strip it
             cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
             cleanJson = JSON.parse(cleanJson);
         }
@@ -72,18 +69,37 @@ export default {
         return new Response(JSON.stringify(cleanJson), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // 2. Detect Scam
+      // 2. Detect Scam (UPDATED LOGIC)
       if (url.pathname === "/detect-scam" && request.method === "POST") {
         const { title, price, description } = await request.json();
         
-        const systemPrompt = "You are a fraud detection AI. Output ONLY valid JSON. No markdown.";
+        const systemPrompt = "You are a fraud detection expert for an online marketplace. Output ONLY valid JSON. No markdown.";
+        
+        // IMPROVED PROMPT: Uses general logic instead of strict rules
         const userPrompt = `
-          Analyze fraud risk in Uganda.
-          Item: ${title}, Price: ${price} UGX, Desc: ${description}.
-          Rules: Electronics below 50% market value are HIGH risk.
+          Analyze this product listing for fraud risk in the context of Uganda (Currency: UGX).
+          
+          Item Name: "${title}"
+          Listed Price: ${price} UGX
+          Description: "${description}"
+
+          INSTRUCTIONS:
+          1. Estimate the approximate market value of this item in Uganda.
+          2. Compare the Listed Price to the Market Value.
+          3. If the price is unreasonably low (e.g., < 10% of value), flag as HIGH risk.
+          4. Look for contradictions (e.g., "New Car" for "50,000 UGX").
+          5. Check for suspicious phrases in description (e.g., "pay delivery first").
+
+          Examples of HIGH Risk:
+          - "Toyota Corolla" for 500,000 UGX (Real value ~15M+)
+          - "iPhone 14" for 150,000 UGX (Real value ~3M+)
           
           Return exactly this JSON structure:
-          { "riskScore": 0-100, "riskLevel": "Low/Medium/High", "reason": "Short explanation" }
+          { 
+            "riskScore": (integer 0-100), 
+            "riskLevel": "Low" or "Medium" or "High", 
+            "reason": "Clear explanation of why based on price analysis." 
+          }
         `;
         
         const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
@@ -112,7 +128,6 @@ export default {
         return new Response(JSON.stringify({ results: hits }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // Root Check
       return new Response(JSON.stringify({ status: "Active", message: "Kabale AI is Online" }), { 
         headers: { ...corsHeaders, "Content-Type": "application/json" } 
       });
