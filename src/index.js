@@ -4,27 +4,28 @@ import algoliasearch from "algoliasearch";
 
 export default {
   async fetch(request, env) {
-    // 1. SETUP FIREBASE (Using env vars for security)
+    // 1. SETUP FIREBASE 
+    // We use the specific names you have, and standard ones for the rest
     const firebaseConfig = {
-      apiKey: env.FIREBASE_API_KEY,
-      authDomain: env.FIREBASE_AUTH_DOMAIN,
-      projectId: env.FIREBASE_PROJECT_ID,
-      storageBucket: env.FIREBASE_STORAGE_BUCKET,
-      messagingSenderId: env.FIREBASE_MESSAGING_SENDER_ID,
-      appId: env.FIREBASE_APP_ID
+      apiKey: env.FIREBASE_API_KEY, // You need to add this to Cloudflare
+      authDomain: env.FIREBASE_AUTH_DOMAIN, // You need to add this
+      projectId: env.FIREBASE_PROJECT_ID, // MATCHES YOUR SCREENSHOT
+      storageBucket: env.FIREBASE_STORAGE_BUCKET, // You need to add this
+      messagingSenderId: env.FIREBASE_MESSAGING_SENDER_ID, // You need to add this
+      appId: env.FIREBASE_APP_ID // You need to add this
     };
     
-    // Initialize only if not already initialized
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
     // 2. SETUP ALGOLIA
-    const algoliaClient = algoliasearch(env.ALGOLIA_APP_ID, env.ALGOLIA_API_KEY);
-    const algoliaIndex = algoliaClient.initIndex("products"); // Assuming your index is 'products'
+    // MATCHES YOUR SCREENSHOT EXACTLY
+    const algoliaClient = algoliasearch(env.ALGOLIA_APP_ID, env.ALGOLIA_SEARCH_API_KEY);
+    const algoliaIndex = algoliaClient.initIndex("products"); 
 
     const url = new URL(request.url);
     
-    // CORS Headers (Allow your website to talk to this agent)
+    // CORS Headers
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
@@ -43,13 +44,7 @@ export default {
       const prompt = `
         Write a sales listing for KabaleOnline (Uganda).
         Product: ${title} (${price} UGX). Features: ${features}.
-        
-        Output JSON:
-        { 
-          "shortDesc": "2 sentences for preview.", 
-          "longDesc": "Detailed, professional paragraph.", 
-          "seoTitle": "Catchy title with 'Kabale'."
-        }
+        Output JSON: { "shortDesc": "...", "longDesc": "...", "seoTitle": "..." }
       `;
       const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
         messages: [{ role: "user", content: prompt }],
@@ -62,10 +57,9 @@ export default {
     if (url.pathname === "/detect-scam" && request.method === "POST") {
       const { title, price, description } = await request.json();
       const prompt = `
-        Analyze for fraud risk in Uganda context.
+        Analyze fraud risk in Uganda.
         Item: ${title}, Price: ${price} UGX, Desc: ${description}.
-        Rules: Electronics below 50% market value are HIGH risk.
-        Output JSON: { "riskScore": 0-100, "riskLevel": "Low/Medium/High", "reason": "Short explanation" }
+        Output JSON: { "riskScore": 0-100, "riskLevel": "Low/Medium/High", "reason": "..." }
       `;
       const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
         messages: [{ role: "user", content: prompt }],
@@ -74,24 +68,17 @@ export default {
       return new Response(JSON.stringify(response), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // 3. NEW: Algolia Product Lookup (The "Eyes" of the AI)
+    // 3. Algolia Lookup
     if (url.pathname === "/lookup-product" && request.method === "POST") {
       const { query } = await request.json();
-      
       try {
-        // Search Algolia
         const { hits } = await algoliaIndex.search(query, {
           attributesToRetrieve: ['name', 'price', 'category', 'objectID'],
           hitsPerPage: 5
         });
-        
-        return new Response(JSON.stringify({ results: hits }), { 
-          headers: { ...corsHeaders, "Content-Type": "application/json" } 
-        });
+        return new Response(JSON.stringify({ results: hits }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), { 
-          status: 500, headers: corsHeaders 
-        });
+        return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
       }
     }
 
