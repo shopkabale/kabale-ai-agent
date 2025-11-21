@@ -1,0 +1,6 @@
+name = "kabale-ai-agent"
+main = "src/index.js"
+compatibility_date = "2024-11-20"
+
+[ai]
+binding = "AI"
