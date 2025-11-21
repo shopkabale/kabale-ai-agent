@@ -1,0 +1,9 @@
+{
+  "name": "kabale-ai-agent",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "dependencies": {
+    "firebase": "^10.13.0",
+    "algoliasearch": "^4.20.0"
+  }
+}
